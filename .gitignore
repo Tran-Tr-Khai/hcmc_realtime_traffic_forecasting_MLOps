@@ -1,1 +1,10 @@
+.venv/
+.env/
 data/
+test/
+models/
+
+__pycache__/
+
+logs/
+minio_data/
