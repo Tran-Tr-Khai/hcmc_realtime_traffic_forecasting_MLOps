@@ -1,98 +1,116 @@
 import os
-import json
 import logging
-from typing import Set, Optional
+import time
+from typing import Generator, Tuple, Optional
 
 import polars as pl
 from dotenv import load_dotenv
 import boto3
-from botocore.exceptions import ClientError
+import ijson  # BẮT BUỘC: pip install ijson
 
+# Thiết lập logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 class MinIoTrafficExtractor:
     def __init__(self, raw_data_path: str):
         self.raw_data_path = raw_data_path
-
-        # MinIO / S3 credentials
         self.endpoint = os.getenv("MINIO_ENDPOINT_URL")
         self.access_key = os.getenv("MINIO_ACCESS_KEY")
         self.secret_key = os.getenv("MINIO_SECRET_KEY")
         self.default_bucket = os.getenv("MINIO_BUCKET_NAME")
-
-        self._s3_client: Optional[boto3.client] = None
-
-    def _ensure_s3_client(self):
-        if self._s3_client is None:
-            if not all([self.endpoint, self.access_key, self.secret_key]):
-                raise ValueError("Missing MinIO credentials in environment.")
-            self._s3_client = boto3.client(
-                "s3",
-                endpoint_url=self.endpoint,
-                aws_access_key_id=self.access_key,
-                aws_secret_access_key=self.secret_key,
-            )
-        return self._s3_client
-
-    def _read_json_from_s3(self, bucket: str, key: str):
-        client = self._ensure_s3_client()
-        try:
-            # Lưu ý: Với file >500MB, cách đọc này sẽ tốn RAM.
-            # Nhưng với JSON nested, đây là cách đơn giản nhất.
-            resp = client.get_object(Bucket=bucket, Key=key)
-            raw = resp["Body"].read().decode("utf-8")
-            return json.loads(raw)
-        except ClientError as e:
-            logger.exception("Failed to read s3://%s/%s: %s", bucket, key, e)
-            raise
-
-    def _load_data(self):
-        # Check if full S3 path provided
-        if self.raw_data_path.startswith("s3://"):
-            parts = self.raw_data_path.replace("s3://", "").split("/", 1)
-            if len(parts) != 2:
-                raise ValueError("Invalid S3 path format. Use s3://bucket/key")
-            return self._read_json_from_s3(bucket=parts[0], key=parts[1])
-
-        # Check if key provided + default bucket exists
-        if self.default_bucket:
-            return self._read_json_from_s3(bucket=self.default_bucket, key=self.raw_data_path)
-
-        raise ValueError(
-            "MinIO extractor requires a full 's3://' path OR 'MINIO_BUCKET_NAME' env var set."
+        
+        if not all([self.endpoint, self.access_key, self.secret_key]):
+            raise ValueError("Missing MinIO credentials.")
+            
+        self._s3_client = boto3.client(
+            "s3",
+            endpoint_url=self.endpoint,
+            aws_access_key_id=self.access_key,
+            aws_secret_access_key=self.secret_key,
         )
 
+    def _get_s3_stream(self, bucket: str, key: str):
+        """Lấy luồng dữ liệu (stream) thay vì tải cả file."""
+        try:
+            response = self._s3_client.get_object(Bucket=bucket, Key=key)
+            return response["Body"]
+        except Exception as e:
+            logger.error(f"Failed to get object s3://{bucket}/{key}: {e}")
+            raise
+
+    def _parse_traffic_stream(self, stream) -> Generator[Tuple[int, int, int], None, None]:
+        """
+        Dùng ijson để duyệt qua file JSON mà không load vào RAM.
+        Cấu trúc: { "YYYY-MM-DD": { "sensor_id": { "filename": { "count": X, ... } } } }
+        """
+        try:
+            # ijson.kvitems(stream, "") giúp duyệt qua level cao nhất (Date)
+            for date_str, sensors in ijson.kvitems(stream, ""):
+                for sensor_id, files in sensors.items():
+                    for filename, details in files.items():
+                        ts = self._extract_timestamp_from_filename(filename)
+                        if ts is not None:
+                            # Yield tuple (nhẹ hơn dict) để tiết kiệm memory
+                            yield (
+                                ts,
+                                int(sensor_id),
+                                int(details.get("count", 0))
+                            )
+        except Exception as e:
+            logger.error(f"Error parsing stream: {e}")
+            raise
+
     def extract(self) -> pl.LazyFrame:
-        logger.info(f"Loading data from {self.raw_data_path}")
-        data = self._load_data()
+        # Xử lý đường dẫn
+        if self.raw_data_path.startswith("s3://"):
+            parts = self.raw_data_path.replace("s3://", "").split("/", 1)
+            bucket, key = parts[0], parts[1]
+        elif self.default_bucket:
+            bucket, key = self.default_bucket, self.raw_data_path
+        else:
+            raise ValueError("Invalid path configuration")
 
-        rows = []
-        # Parsing logic giữ nguyên vì đúng với cấu trúc Data của bạn
-        for date_str, sensors in data.items():
-            for sensor_id, files in sensors.items():
-                for filename, details in files.items():
-                    timestamp_ms = self._extract_timestamp_from_filename(filename)
-                    if timestamp_ms is not None:
-                        rows.append({
-                            "timestamp": timestamp_ms,
-                            "sensor_id": int(sensor_id),
-                            "count": int(details.get("count", 0)),
-                        })
+        logger.info(f"🚀 Streaming data from {bucket}/{key}")
 
-        logger.info(f"Extracted {len(rows)} records.")
+        # 1. Lấy Stream
+        stream = self._get_s3_stream(bucket, key)
+
+        # 2. Tạo Generator
+        record_generator = self._parse_traffic_stream(stream)
+
+        # 3. Tạo Polars DataFrame từ Generator
+        # Schema tường minh giúp Polars cấp phát bộ nhớ hiệu quả
+        schema = {
+            "timestamp": pl.Int64,
+            "sensor_id": pl.Int64,
+            "count": pl.Int64
+        }
+
+        data_list = list(record_generator)
+        if not data_list:
+            logger.warning("⚠️ Generator yielded no data! Check your JSON structure or File Path.")
+        # from_records tiêu thụ generator trực tiếp
+        df = pl.from_records(data_list, schema=schema, orient="row")
         
+        logger.info(f"✅ Extracted {df.height} records via streaming.")
+
+        # 4. Trả về LazyFrame với xử lý Timezone chuẩn
         return (
-            pl.DataFrame(rows)
-            .lazy()
+            df.lazy()
             .with_columns(
                 pl.from_epoch(pl.col("timestamp"), time_unit="ms")
+                .alias("timestamp_utc")
+            )
+            .with_columns(
+                pl.col("timestamp_utc")
+                .dt.replace_time_zone("UTC")              # Đánh dấu gốc là UTC
+                .dt.convert_time_zone("Asia/Ho_Chi_Minh") # Chuyển sang giờ VN
                 .alias("timestamp")
             )
-            # Nếu server chạy khác múi giờ VN, hãy kiểm tra lại logic này.
-            .with_columns(
-                (pl.col("timestamp") + pl.duration(hours=7)).alias("timestamp")
-            )
+            .select(["timestamp", "sensor_id", "count"])
         )
 
     def _extract_timestamp_from_filename(self, filename: str) -> Optional[int]:
@@ -101,7 +119,7 @@ class MinIoTrafficExtractor:
         except (IndexError, ValueError):
             return None
 
-# Test script
+# --- TEST SCRIPT ĐỂ SO SÁNH ---
 if __name__ == "__main__":
     import time
     import tracemalloc  # <--- Thư viện đo bộ nhớ
