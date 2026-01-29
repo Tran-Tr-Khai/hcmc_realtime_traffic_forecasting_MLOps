@@ -5,90 +5,62 @@ import polars as pl
 
 logger = logging.getLogger(__name__)
 
-
 class TimeSeriesResampler:
     def __init__(self, interval: str = "5m", start_time: time = None, end_time: time = None):
-        """
-        Initialize resampler.
-        
-        Args:
-            interval: Resample interval (Polars duration string, e.g., "5m")
-            start_time: Optional time filter after resampling
-            end_time: Optional time filter after resampling
-        """
         self.interval = interval
         self.start_time = start_time
         self.end_time = end_time
-    
-    def transform(self, df: pl.LazyFrame) -> pl.DataFrame:
+
+    def transform(self, lazy_df: pl.LazyFrame) -> pl.DataFrame:
         """
-        Resample time series to fixed intervals.
-        
-        Args:
-            df: LazyFrame with [timestamp, sensor_id, count]
-            
-        Returns:
-            DataFrame in wide format with timestamp index and sensor columns
+        Resamples time series data using Static Window Truncation.
+        Strategy: Truncate Timestamp -> GroupBy (Static) -> Pivot
+        Benefit: Faster and strictly robust against unsorted data.
         """
-        # Collect to eager for pivoting (Polars pivot requires eager)
-        df_eager = df.collect()
-        
-        logger.info(f"Collected {df_eager.shape[0]} records for resampling")
-        
-        # Pivot to wide format
-        pivot_df = df_eager.pivot(
-            values='count',
-            index='timestamp',
-            on='sensor_id',
-            aggregate_function='mean'
-        )
-        
-        # Sort by timestamp for group_by_dynamic
-        pivot_df = pivot_df.sort('timestamp')
-        
-        # Get all sensor columns (exclude timestamp)
-        sensor_cols = [col for col in pivot_df.columns if col != 'timestamp']
-        
-        # Resample to fixed intervals using group_by_dynamic
-        resampled = pivot_df.group_by_dynamic(
-            'timestamp',
-            every=self.interval,
-            period=self.interval,
-            closed='left'
-        ).agg([
-            pl.col(sensor_col).mean().alias(sensor_col) 
-            for sensor_col in sensor_cols
-        ])
-        
-        # Apply time filter again after resampling if specified
-        if self.start_time is not None and self.end_time is not None:
-            resampled = resampled.filter(
-                (pl.col('timestamp').dt.time() >= pl.time(
-                    self.start_time.hour, 
-                    self.start_time.minute, 
-                    self.start_time.second
-                )) &
-                (pl.col('timestamp').dt.time() <= pl.time(
-                    self.end_time.hour, 
-                    self.end_time.minute, 
-                    self.end_time.second
-                ))
+        # dt.truncate: Làm tròn thời gian xuống (ví dụ 08:03 -> 08:00)
+        resampled_lazy = (
+            lazy_df
+            .with_columns(
+                pl.col("timestamp")
+                .dt.truncate(self.interval)
+                .alias("timestamp_bucket")
             )
-        
-        logger.info(
-            f"Resampled to {self.interval} intervals: shape {resampled.shape}"
+            .group_by(["timestamp_bucket", "sensor_id"]) # Group tĩnh
+            .agg(pl.col("count").mean().alias("count"))
         )
+
+        if self.start_time and self.end_time:
+            time_filter = (
+                (pl.col('timestamp_bucket').dt.time() >= self.start_time) &
+                (pl.col('timestamp_bucket').dt.time() <= self.end_time)
+            )
+            resampled_lazy = resampled_lazy.filter(time_filter)
+
+        df_long = resampled_lazy.collect()
         
-        return resampled
-    
+        if df_long.is_empty():
+            logger.warning("Resampled data is empty!")
+            return df_long
+
+        wide_df = df_long.pivot(
+            on="sensor_id",
+            index="timestamp_bucket", # Dùng cột bucket làm index
+            values="count",
+            aggregate_function="mean"
+        )
+
+        wide_df = wide_df.rename({"timestamp_bucket": "timestamp"})
+        
+        sensor_cols = sorted([c for c in wide_df.columns if c != "timestamp"])
+        
+        final_df = (
+            wide_df
+            .sort("timestamp")
+            .select(["timestamp"] + sensor_cols)
+        )
+
+        logger.info(f"Resampled V2 (Truncate method): {final_df.shape}")
+        return final_df
+
     def get_sensor_columns(self, df: pl.DataFrame) -> List[str]:
-        """
-        Extract sensor column names from resampled DataFrame.
-        
-        Args:
-            df: Resampled DataFrame
-            
-        Returns:
-            List of sensor column names (as strings)
-        """
-        return [col for col in df.columns if col != 'timestamp']
+        return [col for col in df.columns if col != "timestamp"]
