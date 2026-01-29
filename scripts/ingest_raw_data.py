@@ -2,7 +2,7 @@ import argparse
 import logging
 import os
 
-from src.core.ingestors.MinIOIngestor import MinIOIngestor
+from src.core.ingestors.minio_ingestor import MinIOIngestor
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",

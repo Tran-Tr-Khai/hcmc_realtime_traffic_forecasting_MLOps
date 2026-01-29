@@ -1,6 +1,6 @@
 import os
 import logging
-
+import mimetypes
 from dotenv import load_dotenv
 import boto3
 from botocore.exceptions import ClientError
@@ -56,11 +56,21 @@ class MinIOIngestor:
         local_path: path to local file
         s3_path: key/path inside the bucket (use forward slashes)
         """
-        self.logger.info("Uploading %s to s3://%s/%s", local_path, self.bucket_name, s3_path)
+        content_type, _ = mimetypes.guess_type(local_path)
+        if content_type is None:
+            content_type = "application/octet-stream"
+        
+        self.logger.info("Uploading %s -> s3://%s/%s (%s)", local_path, self.bucket_name, s3_path, content_type)
+        
         try:
-            self.client.upload_file(local_path, self.bucket_name, s3_path)
+            self.client.upload_file(
+                local_path, 
+                self.bucket_name, 
+                s3_path,
+                ExtraArgs={'ContentType': content_type} # <--- FIX
+            )
         except ClientError:
-            self.logger.exception("Failed to upload %s to %s/%s", local_path, self.bucket_name, s3_path)
+            self.logger.exception("Failed to upload %s", local_path)
             raise
 
     def ingest_folder(self, local_folder_path: str, s3_prefix: str = "") -> None:
