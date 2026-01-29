@@ -1,0 +1,57 @@
+name: CI Integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Cho phép bấm nút chạy tay
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+          cache: 'pip'
+
+      # [QUAN TRỌNG] Dựng MinIO Service Container thật
+      - name: Start MinIO Service
+        run: |
+          docker run -d \
+            -p 9000:9000 \
+            -p 9001:9001 \
+            --name minio-ci \
+            -e "MINIO_ROOT_USER=minioadmin" \
+            -e "MINIO_ROOT_PASSWORD=minioadmin" \
+            minio/minio server /data --console-address ":9001"
+          
+          # Đợi 5s để server khởi động xong
+          echo "⏳ Waiting for MinIO to boot..."
+          sleep 5
+          docker ps
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # Cài các thư viện cần thiết cho test
+          pip install flake8 pytest boto3 polars ijson python-dotenv
+
+      # Chạy Linting (Vẫn giữ quy tắc nhẹ nhàng như trước)
+      - name: Lint with flake8
+        run: |
+          flake8 src tests --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      # [TEST THẬT] Chạy Integration Test
+      - name: Run Integration Tests
+        env:
+          # Chỉ định thư mục gốc để Python tìm thấy module 'src'
+          PYTHONPATH: . 
+        run: |
+          # Chạy đúng file test tích hợp
+          pytest -v tests/test_integration.py
