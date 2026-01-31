@@ -48,10 +48,14 @@ jobs:
           flake8 src tests --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
       # [TEST THẬT] Chạy Integration Test
-      - name: Run Integration Tests
+      - name: Run All Tests
         env:
-          # Chỉ định thư mục gốc để Python tìm thấy module 'src'
-          PYTHONPATH: . 
+          PYTHONPATH: .
+          # Khai có thể truyền biến môi trường trực tiếp ở đây để các file test dùng chung
+          MINIO_ENDPOINT_URL: "http://localhost:9000"
+          MINIO_ACCESS_KEY: "minioadmin"
+          MINIO_SECRET_KEY: "minioadmin"
+          MINIO_BUCKET_NAME: "traffic-bronze-test"
         run: |
-          # Chạy đúng file test tích hợp
-          pytest -v tests/test_integration.py
+          # Lệnh này sẽ chạy cả test_integration.py và test_pipeline.py
+          pytest -v tests/

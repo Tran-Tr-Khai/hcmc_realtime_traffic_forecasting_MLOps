@@ -21,7 +21,7 @@ logging.basicConfig(
 def main():
     parser = argparse.ArgumentParser(description="Ingest local raw data folder to MinIO")
     parser.add_argument("--local-dir", default="data/raw", help="Local folder containing raw files")
-    parser.add_argument("--prefix", default="", help="S3 prefix to write files under (optional)")
+    parser.add_argument("--prefix", default="raw", help="S3 prefix to write files under (optional)")
     args = parser.parse_args()
 
     # Instantiate ingestor (uses env vars for credentials)

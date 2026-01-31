@@ -116,3 +116,20 @@ class MinIOClient:
             return True
         except ClientError:
             return False
+        
+    def put_object(self, bucket_name: str, object_name: str, data, length: int):
+        """
+        Wrapper để upload file lên MinIO mà không cần lộ boto3 ra ngoài.
+        """
+        try:
+            # self.client là boto3 client đã init trong __init__
+            self.client.put_object(
+                Bucket=bucket_name,
+                Key=object_name,
+                Body=data,
+                ContentLength=length
+            )
+            # Không cần log ở đây vì Pipeline đã log rồi, hoặc log debug tùy ý
+        except Exception as e:
+            # Ném lỗi ra để Pipeline xử lý
+            raise e
