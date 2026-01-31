@@ -4,6 +4,7 @@ data/
 test/
 models/
 
+.vscode/
 __pycache__/
 
 logs/
