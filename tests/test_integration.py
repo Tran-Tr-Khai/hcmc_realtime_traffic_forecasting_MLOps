@@ -6,9 +6,9 @@ import pytest
 import polars as pl
 from unittest.mock import patch
 
-# Import các class "xịn" của bạn
-from src.core.ingestors.minio_ingestor import MinIOIngestor
-from src.offline.extractors.minio_traffic_extractor import MinIoTrafficExtractor
+# Import các class theo cấu trúc mới
+from src.ingestors import LocalToMinIOIngestor
+from src.offline.extractors import TrafficExtractor
 
 # --- CẤU HÌNH MÔI TRƯỜNG TEST ---
 TEST_ENV = {
@@ -68,10 +68,10 @@ def test_full_pipeline_ingest_and_extract():
 
     # --- BƯỚC 1: INGESTION ---
     print("1️⃣ Testing Ingestion...")
-    # Cần patch biến môi trường vì class MinIOIngestor load .env ngay khi init
+    # Cần patch biến môi trường vì class LocalToMinIOIngestor load .env ngay khi init
     with patch.dict(os.environ, TEST_ENV):
-        ingestor = MinIOIngestor()
-        ingestor.setup_bucket() # Tạo bucket thật trên MinIO Container
+        ingestor = LocalToMinIOIngestor()
+        ingestor.ensure_bucket() # Tạo bucket thật trên MinIO Container
         ingestor.ingest_folder(TEMP_DATA_DIR)
     
     print("✅ Ingestion finished. Data uploaded to MinIO.")
@@ -81,8 +81,8 @@ def test_full_pipeline_ingest_and_extract():
     file_key = "test-traffic.json" # Do ingestor giữ nguyên tên file
     
     with patch.dict(os.environ, TEST_ENV):
-        # Lưu ý: Class của bạn xử lý logic path hơi đặc thù, ta truyền đúng key
-        extractor = MinIoTrafficExtractor(file_key)
+        # TrafficExtractor nhận data_key và optional bucket_name
+        extractor = TrafficExtractor(data_key=file_key)
         
         # Thực hiện Extract
         df = extractor.extract().collect()
