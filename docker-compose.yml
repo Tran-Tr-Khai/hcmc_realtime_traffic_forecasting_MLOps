@@ -21,4 +21,95 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    networks:
+      - traffic-network
     restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      # --- Basic Config ---
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker, controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      
+      # --- Networking ---
+      # 9092: Cho máy ngoài (Python script)
+      # 29092: Cho Docker nội bộ (Kafka UI, Spark)
+      # 29093: Cho Controller (KRaft nội bộ)
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      
+      # --- Storage & Logs ---
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+
+      # Định danh Cluster (Bắt buộc với KRaft nếu không format thủ công)
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+
+    networks:
+      - traffic-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    networks:
+      - traffic-network
+
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: redis
+  #   hostname: redis
+  #   ports:
+  #     - "6379:6379"
+  #   command: redis-server --appendonly yes --appendfsync everysec
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - traffic-network
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped
+
+# -------------------------------------------------------------------------
+# NETWORKS & VOLUMES
+# -------------------------------------------------------------------------
+networks:
+  traffic-network:
+    driver: bridge
+    name: traffic-network
+
+volumes:
+  kafka-data:
+    driver: local  
+  redis-data:
+    driver: local
