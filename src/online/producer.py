@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from kafka import KafkaProducer
 from kafka.errors import KafkaError
+
+from src.core.storage.kafka_client import create_kafka_producer
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +52,8 @@ class KafkaTrafficProducer:
     def _init_producer(self):
         """Initialize Kafka producer with proper configuration."""
         try:
-            self.producer = KafkaProducer(
+            self.producer = create_kafka_producer(
                 bootstrap_servers=self.bootstrap_servers,
-                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                key_serializer=lambda k: k.encode('utf-8') if k else None,
-                
-                # Performance tuning
                 acks='all',  # Wait for all replicas to acknowledge
                 retries=3,   # Retry failed sends
                 max_in_flight_requests_per_connection=5,
@@ -69,7 +66,6 @@ class KafkaTrafficProducer:
                 compression_type='gzip',
                 
                 # Error handling
-                api_version=(2, 5, 0),
                 request_timeout_ms=30000,
                 metadata_max_age_ms=300000
             )
