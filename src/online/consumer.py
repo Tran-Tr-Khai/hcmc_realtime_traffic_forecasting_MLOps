@@ -7,9 +7,9 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 
+from src.core.storage.kafka_client import create_kafka_consumer
 from src.core.storage.redis_client import create_redis_client
 
 # Configure logging
@@ -181,7 +181,7 @@ class RealtimeTrafficConsumer:
         )
         
         # Kafka consumer (lazy init)
-        self.consumer: Optional[KafkaConsumer] = None
+        self.consumer = None
         
         # Graceful shutdown flag
         self.running = True
@@ -196,14 +196,13 @@ class RealtimeTrafficConsumer:
         Establish connection to Kafka with retry logic.
         """
         try:
-            self.consumer = KafkaConsumer(
-                self.kafka_topic,
+            self.consumer = create_kafka_consumer(
+                topic=self.kafka_topic,
                 bootstrap_servers=self.kafka_broker,
                 group_id=self.kafka_group_id,
-                auto_offset_reset='earliest',  # Start from latest on first run
+                auto_offset_reset='earliest',  # Start from earliest on first run
                 enable_auto_commit=False,
                 auto_commit_interval_ms=5000,
-                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
                 max_poll_interval_ms=300000,  # 5 minutes
                 session_timeout_ms=30000,
                 heartbeat_interval_ms=10000,
@@ -329,16 +328,15 @@ class RealtimeTrafficConsumer:
                 return
             
             # Import and run inference (lazy import to avoid circular dependency)
-            from src.model.mock_inference import run_inference
+            from src.model.inference import run_inference
             
             predictions = run_inference(window)
             
-            logger.info(
-                f"Inference completed: {len(predictions)} predictions generated"
-            )
-            
-            # TODO: Publish predictions to Kafka output topic or store in DB
-            
+            if self.redis_client.save_predictions(predictions):
+                logger.info("Predictions saved to Redis successfully.")
+            else:
+                logger.error("Failed to save predictions to Redis.")
+
         except Exception as e:
             logger.error(f"Inference failed: {e}", exc_info=True)
     
