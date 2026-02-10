@@ -11,8 +11,7 @@ from dotenv import load_dotenv
 
 from src.offline.extractors import TrafficExtractor
 from src.offline.transformers import TimeSeriesResampler, CausalImputer
-from src.offline.graph import MinIoGraphLoader
-from src.offline.graph import AdjacencyMatrixBuilder
+from src.core.graph import MinIoGraphLoader, AdjacencyMatrixBuilder
 
 # Load environment variables
 load_dotenv()
@@ -139,19 +138,68 @@ class OfflinePipeline:
             logger.error(f"Failed to save to MinIO at key '{key}': {e}")
             raise e # Bắt buộc raise lỗi để Pipeline biết mà dừng
 
-    def _process_topology(self, valid_columns: list[str]) -> None:
-        valid_node_ids = [int(col) for col in valid_columns if col != 'timestamp']
-        logger.info(f"Aligning graph to {len(valid_node_ids)} valid sensors...")
-
-        # 1. Load & Filter
-        raw_topology = self.graph_loader.load_topology()
-        aligned_topology = raw_topology.filter_to_nodes(set(valid_node_ids))
-
-        # 2. Build Matrix (Normalize)
-        adj_builder = AdjacencyMatrixBuilder(add_self_loops=True)
-        final_adj_matrix = adj_builder.build(aligned_topology)
+    def _process_topology(self, valid_columns: list[str]) -> np.ndarray:
+        """
+        Build Adjacency Matrix aligned with DataFrame columns.
+        Includes a SANITY CHECK to prove alignment.
+        """
+        # 1. Lấy danh sách cột từ DataFrame (Ground Truth)
+        # valid_columns đã được sort trong resampler (thường là string sort)
+        ordered_sensor_cols = [c for c in valid_columns if c != 'timestamp']
         
-        return final_adj_matrix
+        # Chuyển sang int để tìm trong Graph
+        target_node_ids = [int(col) for col in ordered_sensor_cols]
+        
+        logger.info(f"Aligning graph to {len(target_node_ids)} sensors.")
+
+        # 2. Load Topology gốc
+        raw_topology = self.graph_loader.load_topology()
+        
+        # --- [START] SANITY CHECK (KIỂM TRA ĐỐI CHIẾU) ---
+        logger.info("-" * 40)
+        logger.info("🕵️ ALIGNMENT SANITY CHECK (First 5 items)")
+        logger.info(f"{'Index':<5} | {'DF Column (Name)':<15} | {'Matrix Row (ID)':<15}")
+        logger.info("-" * 40)
+        
+        # In ra 5 phần tử đầu tiên để bạn soi
+        for i in range(min(5, len(target_node_ids))):
+            df_col = ordered_sensor_cols[i]  # Tên cột trong Data
+            matrix_id = target_node_ids[i]   # ID sẽ dùng để xếp hàng ma trận
+            
+            # Nếu 2 cái này lệch nhau về mặt ý nghĩa -> BÁO ĐỘNG
+            logger.info(f"{i:<5} | {df_col:<15} | {matrix_id:<15}")
+            
+        logger.info("-" * 40)
+        # --- [END] SANITY CHECK ---
+
+        # 3. Re-index Logic (Bắt buộc Graph theo thứ tự target_node_ids)
+        # Tìm xem node 10 nằm ở đâu trong graph cũ, node 100 nằm ở đâu...
+        try:
+            index_map = [raw_topology.node_to_index[nid] for nid in target_node_ids]
+        except KeyError as e:
+            logger.error(f"Graph is missing a sensor ID present in Data: {e}")
+            raise e
+
+        # 4. Sắp xếp lại ma trận (Advanced Indexing)
+        raw_adj = raw_topology.adjacency_matrix
+        # Reorder rows and columns
+        aligned_adj = raw_adj[index_map, :][:, index_map]
+        
+        logger.info(f"Matrix re-indexed. Shape: {aligned_adj.shape}")
+
+        # 5. Normalize (Symmetric)
+        # D^(-1/2) * (A+I) * D^(-1/2)
+        adj_with_loop = aligned_adj + np.eye(aligned_adj.shape[0])
+        row_sum = np.array(adj_with_loop.sum(1))
+        
+        # Tránh chia cho 0
+        d_inv_sqrt = np.power(row_sum, -0.5).flatten()
+        d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.
+        d_mat_inv_sqrt = np.diag(d_inv_sqrt)
+        
+        norm_adj = d_mat_inv_sqrt.dot(adj_with_loop).dot(d_mat_inv_sqrt)
+        
+        return norm_adj
         
     def validate_data(self, df: pl.DataFrame):
         """Kiểm tra sức khỏe dữ liệu (Data Health Check)."""

@@ -83,7 +83,6 @@ class TrafficDataset(Dataset):
         if self.max_flow == 0:
             logger.warning("max_flow is 0, setting to 1.0 to avoid division error")
             self.max_flow = 1.0
-        
         # Normalize data
         self.normalized_data = self.data / self.max_flow
         

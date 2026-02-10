@@ -3,7 +3,7 @@ from typing import List, Set
 import polars as pl
 import numpy as np
 
-from src.offline.graph import GraphTopology
+from src.core.graph import GraphTopology
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,18 @@ class CausalImputer:
         else:
             logger.info("Layer 3 skipped.")
         
+        # --- LAYER 4: GLOBAL MEAN RESCUE ---
+        if nulls_l3 > 0:
+            df = self._global_imputation(df, sensor_cols, threshold=0.05)
+            
+            # Tính lại thống kê sau Layer 4
+            nulls_l4 = self._count_total_nulls(df, sensor_cols)
+            fixed_l4 = nulls_l3 - nulls_l4
+            sparsity_l4 = (nulls_l4 / total_cells) * 100
+            logger.info(f"Layer 4 (Global)   fixed: {fixed_l4:,}. Remaining: {nulls_l4:,} ({sparsity_l4:.2f}%)")
+        else:
+            logger.info("Layer 4 skipped.")
+
         # CLEANUP
         df = self._drop_unresolved_sensors(df, sensor_cols)
         df = df.drop(['date', 'weekday', 'time'])
@@ -224,6 +236,45 @@ class CausalImputer:
         
         logger.info("Layer 3: Historical Pattern Imputation done.")
         return df_final
+    
+    def _global_imputation(self, df: pl.DataFrame, sensor_cols: List[str], threshold: float = 0.5) -> pl.DataFrame:
+        """
+        Layer 4: Global Mean Rescue (Last Resort).
+        Chiến thuật: Cứu các sensor còn thiếu ít dữ liệu (< 5%) bằng giá trị trung bình toàn cục của chính nó.
+        """
+        total_rows = df.height
+        rescue_exprs = []
+        rescued_sensors = []
+
+        # 1. Tính nhanh số lượng null của tất cả sensor (1 lệnh duy nhất)
+        # Trả về 1 row chứa null count của từng cột
+        null_stats = df.select([
+            pl.col(c).null_count().alias(c) for c in sensor_cols
+        ]).row(0)
+        
+        # 2. Duyệt qua kết quả thống kê để quyết định cứu hay bỏ
+        for idx, col in enumerate(sensor_cols):
+            missing_count = null_stats[idx]
+            
+            if missing_count > 0:
+                missing_rate = missing_count / total_rows
+                
+                # CHỈ CỨU NẾU TỶ LỆ LỖI < THRESHOLD (Ví dụ 5%)
+                if missing_rate < threshold:
+                    # Fill bằng Mean của toàn bộ cột đó
+                    expr = pl.col(col).fill_null(pl.col(col).mean())
+                    rescue_exprs.append(expr)
+                    rescued_sensors.append(col)
+
+        # 3. Thực thi (Chỉ chạy 1 lần with_columns cho tất cả sensor cần cứu)
+        if rescue_exprs:
+            df = df.with_columns(rescue_exprs)
+            logger.info(f"Layer 4 (Global Rescue): Saved {len(rescued_sensors)} sensors using Global Mean (Threshold < {threshold*100}%).")
+            # logger.debug(f"Rescued sensors: {rescued_sensors}")
+        else:
+            logger.info("Layer 4 skipped (No eligible sensors to rescue).")
+            
+        return df        
 
     def _drop_unresolved_sensors(self, df: pl.DataFrame, sensor_cols: List[str]) -> pl.DataFrame:
         """Loại bỏ sensor chết hẳn (không cứu được bằng cả 3 cách)."""

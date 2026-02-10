@@ -33,7 +33,7 @@ def main():
     try:
         producer = KafkaTrafficProducer(
             bootstrap_servers=args.broker,
-            topic_name='traffic-raw',
+            topic_name='traffic-realtime',
             input_file=args.file,
             speed_factor=args.speed
         )
