@@ -29,12 +29,12 @@ def main():
     parser = argparse.ArgumentParser(description="Run Offline Traffic Data Pipeline (MinIO -> MinIO)")
     
     # Input Args
-    parser.add_argument("--data-key", type=str, default="raw/hcm-traffic-data-realtime.json", help="Input Raw JSON key")
+    parser.add_argument("--data-key", type=str, default="raw/hcmc-traffic-data.json", help="Input Raw JSON key")
     parser.add_argument("--graph-key", type=str, default="raw/hcmc-clustered-graph.json", help="Input Graph Topology key")
     parser.add_argument("--bucket", type=str, help="MinIO bucket name (override env var)")
     
     # Output Args (SỬA ĐỔI: Dùng MinIO Key thay vì Local Path)
-    parser.add_argument("--output-key", type=str, default="processed/traffic_realtime_clean.parquet", help="Output MinIO key (Parquet)")
+    parser.add_argument("--output-key", type=str, default="processed/traffic_clean.parquet", help="Output MinIO key (Parquet)")
     
     # Config Args
     parser.add_argument("--interval", type=str, default="5m", help="Resampling interval")

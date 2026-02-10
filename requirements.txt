@@ -16,8 +16,18 @@ torchaudio>=2.0.0
 # Data processing
 pandas>=2.0.0
 
+# Streaming & Message Broker
+kafka-python>=2.0.2
+
+# State Management & Caching
+redis>=5.0.0
+
 # Development and testing
 flake8>=6.0.0
 pytest>=7.0.0
 pytest-cov>=4.0.0
 
+
+fastapi>=0.100.0
+uvicorn>=0.20.0
+pydantic>=2.0.0

@@ -1,11 +1,12 @@
 .venv/
 .env
 data/
-test/
+benchmarks/
 models/
 
 .vscode/
 __pycache__/
 
+docs/
 logs/
 minio_data/
