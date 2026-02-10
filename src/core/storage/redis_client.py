@@ -238,6 +238,18 @@ class RedisStateManager:
             logger.error(f"Failed to clear window: {e}")
             return False
     
+    def save_predictions(self, predictions: List[Dict[str, Any]]) -> bool:
+        PREDICTION_KEY = "traffic:predictions:latest"
+        try: 
+            self.client.set(PREDICTION_KEY, json.dumps({
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": predictions
+            }))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save prediction: {e}")
+            return False
+        
     def close(self):
         """
         Close Redis connection pool gracefully.
