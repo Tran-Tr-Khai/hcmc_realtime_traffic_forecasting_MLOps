@@ -97,7 +97,9 @@ class TrafficDataBuffer:
             if node_id is not None and count is not None:
                 try:
                     val = float(count)
-                    node_values[node_id].append(val)
+                    # CRITICAL: Store node_id as string to match canonical
+                    # ordering from training (parquet columns are strings)
+                    node_values[str(node_id)].append(val)
                 except ValueError:
                     continue
         
