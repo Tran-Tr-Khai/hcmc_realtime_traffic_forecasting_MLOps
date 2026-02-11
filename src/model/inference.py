@@ -12,14 +12,24 @@ Purpose:
 - Ensure proper shape handling (1, 12, Nodes, 1)
 - Simulate prediction latency
 
+CRITICAL: Node Alignment
+- The canonical node ordering is loaded from models/config.json
+- This ordering MUST match the adjacency matrix used during training
+- Missing sensors are filled with 0.0, unknown sensors are ignored
+
 """
 
+import json
 import logging
 import time
-from typing import List, Dict, Any
+from pathlib import Path
+from typing import List, Dict, Any, Optional
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Path to model config (contains canonical node ordering)
+CONFIG_PATH = Path(__file__).parent.parent.parent / "models" / "config.json"
 
 
 class MockSTGTNModel:
@@ -94,9 +104,47 @@ class MockSTGTNModel:
         return predictions
 
 
-def prepare_input_tensor(window: List[Dict[str, Any]]) -> np.ndarray:
+def load_model_config(config_path: Path = CONFIG_PATH) -> Dict[str, Any]:
+    """
+    Load model configuration including canonical node ordering.
+    
+    Args:
+        config_path: Path to config.json
+        
+    Returns:
+        Dict with model config including 'node_ids', 'max_flow', 'num_nodes'
+    """
+    if not config_path.exists():
+        logger.warning(f"Config file not found: {config_path}. Using dynamic node discovery.")
+        return {}
+    
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    
+    node_ids = config.get('node_ids', [])
+    if node_ids:
+        logger.info(
+            f"Loaded canonical node ordering: {len(node_ids)} nodes "
+            f"(first 5: {node_ids[:5]})"
+        )
+    else:
+        logger.warning(
+            "Config file does not contain 'node_ids'. "
+            "Node alignment cannot be guaranteed. Re-run training to fix."
+        )
+    
+    return config
+
+
+def prepare_input_tensor(
+    window: List[Dict[str, Any]],
+    canonical_node_ids: Optional[List[str]] = None
+) -> np.ndarray:
     """
     Convert Redis window snapshots to model input tensor.
+    
+    CRITICAL: Uses canonical_node_ids from training config to ensure
+    node ordering matches the adjacency matrix and trained model weights.
     
     Args:
         window: List of 12 traffic snapshots from Redis
@@ -105,44 +153,82 @@ def prepare_input_tensor(window: List[Dict[str, Any]]) -> np.ndarray:
                 "data": {"nodes": [{"node_id": ..., "flow": ...}, ...]},
                 ...
             }
+        canonical_node_ids: Ordered list of sensor IDs from training config.
+            If provided, tensor dimensions and ordering are fixed.
+            If None, falls back to dynamic discovery (NOT RECOMMENDED).
     
     Returns:
         np.ndarray: Tensor with shape (1, 12, num_nodes, 1)
     """
     logger.info(f"Preparing input tensor from {len(window)} snapshots")
-    all_sensor_ids = set()
-    for snapshot in window:
-        nodes = snapshot.get("data", {}).get("nodes", [])
-        for node in nodes:
-            if "node_id" in node:
-                all_sensor_ids.add(node.get("node_id"))
-    # Extract node data from each snapshot
-    sorted_sensor_ids = sorted(list(all_sensor_ids))
-    num_nodes = len(sorted_sensor_ids)
+    
+    # --- Determine node ordering ---
+    if canonical_node_ids and len(canonical_node_ids) > 0:
+        # USE CANONICAL ORDERING (from training config)
+        sorted_sensor_ids = canonical_node_ids
+        num_nodes = len(sorted_sensor_ids)
+        logger.info(
+            f"Using canonical node ordering: {num_nodes} nodes "
+            f"(aligned with training adjacency matrix)"
+        )
+    else:
+        # FALLBACK: Dynamic discovery (DANGEROUS - may not match training order)
+        logger.warning(
+            "No canonical node ordering provided! "
+            "Falling back to dynamic discovery. Predictions may be misaligned."
+        )
+        all_sensor_ids = set()
+        for snapshot in window:
+            nodes = snapshot.get("data", {}).get("nodes", [])
+            for node in nodes:
+                if "node_id" in node:
+                    all_sensor_ids.add(str(node.get("node_id")))
+        sorted_sensor_ids = sorted(list(all_sensor_ids))
+        num_nodes = len(sorted_sensor_ids)
     
     if num_nodes == 0:
         logger.warning("No nodes found in window snapshots!")
-        # Trả về dummy tensor để tránh crash pipeline
         return np.zeros((1, len(window), 1, 1), dtype=np.float32)
 
     logger.debug(f"Aligned tensor will have {num_nodes} nodes.")
+    
+    # Build sensor ID set for fast lookup
+    canonical_set = set(sorted_sensor_ids)
 
     time_steps = []
     
-    # BƯỚC 2: Duyệt từng snapshot và điền dữ liệu vào đúng chỗ (Alignment)
-    for snapshot in window:
-        # Map nhanh: {node_id: flow}
-        current_data_map = {
-            n["node_id"]: n.get("flow", 0.0) # <--- SỬA KEY: 'flow' thay vì 'flow'
-            for n in snapshot.get("data", {}).get("nodes", [])
-        }
+    # Build tensor: iterate each snapshot and align to canonical order
+    for snap_idx, snapshot in enumerate(window):
+        # Build lookup map: {node_id_str: flow}
+        current_data_map = {}
+        unknown_count = 0
+        for n in snapshot.get("data", {}).get("nodes", []):
+            nid = str(n.get("node_id", ""))
+            if nid in canonical_set:
+                current_data_map[nid] = n.get("flow", 0.0)
+            else:
+                unknown_count += 1
         
-        # Tạo vector cho timestep này
+        if unknown_count > 0:
+            logger.debug(
+                f"Snapshot {snap_idx}: {unknown_count} sensors not in "
+                f"canonical set (ignored)"
+            )
+        
+        # Fill vector in canonical order (missing sensors → 0.0)
         step_vector = []
+        missing_count = 0
         for sensor_id in sorted_sensor_ids:
-            # Nếu mất tín hiệu -> Điền 0.0
             val = current_data_map.get(sensor_id, 0.0)
+            if sensor_id not in current_data_map:
+                missing_count += 1
             step_vector.append(val)
+        
+        if missing_count > 0:
+            logger.debug(
+                f"Snapshot {snap_idx}: {missing_count}/{num_nodes} sensors "
+                f"missing (filled with 0.0)"
+            )
             
         time_steps.append(step_vector)
     
@@ -162,12 +248,16 @@ def prepare_input_tensor(window: List[Dict[str, Any]]) -> np.ndarray:
     return input_tensor
 
 
-def format_predictions(predictions: np.ndarray) -> List[Dict[str, Any]]:
+def format_predictions(
+    predictions: np.ndarray,
+    canonical_node_ids: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
     """
     Convert model predictions to human-readable format.
     
     Args:
         predictions: Shape (1, predict_steps, num_nodes, 1)
+        canonical_node_ids: Ordered list of sensor IDs for labeling
     
     Returns:
         List of prediction dictionaries
@@ -180,16 +270,22 @@ def format_predictions(predictions: np.ndarray) -> List[Dict[str, Any]]:
         # Extract predictions for this time step
         step_predictions = predictions[0, t, :, 0]  # Shape: (num_nodes,)
         
-        # Create prediction object
+        # Create prediction object with actual node IDs if available
+        node_predictions = []
+        for node_idx, flow in enumerate(step_predictions):
+            node_id = (
+                canonical_node_ids[node_idx] 
+                if canonical_node_ids and node_idx < len(canonical_node_ids)
+                else node_idx
+            )
+            node_predictions.append({
+                "node_id": node_id,
+                "predicted_flow": float(flow),
+            })
+        
         pred_obj = {
             "time_step": t + 1,
-            "predictions": [
-                {
-                    "node_id": node_idx,
-                    "predicted_flow": float(flow),
-                }
-                for node_idx, flow in enumerate(step_predictions)
-            ],
+            "predictions": node_predictions,
             "statistics": {
                 "mean_flow": float(step_predictions.mean()),
                 "std_flow": float(step_predictions.std()),
@@ -207,6 +303,9 @@ def run_inference(window: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Main inference function - orchestrates the prediction pipeline.
     
+    Loads canonical node ordering from config to ensure tensor alignment
+    matches the trained model and adjacency matrix.
+    
     Args:
         window: List of 12 traffic snapshots from Redis
     
@@ -218,11 +317,31 @@ def run_inference(window: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     logger.info("=" * 60)
     
     try:
-        # Step 1: Prepare input tensor
-        input_tensor = prepare_input_tensor(window)
+        # Step 0: Load model config (canonical node ordering)
+        config = load_model_config()
+        canonical_node_ids = config.get('node_ids', [])
+        
+        if not canonical_node_ids:
+            logger.warning(
+                "Config missing 'node_ids'. Predictions may be misaligned "
+                "with adjacency matrix. Re-run training to fix."
+            )
+        
+        # Step 1: Prepare input tensor (aligned to canonical order)
+        input_tensor = prepare_input_tensor(
+            window, canonical_node_ids=canonical_node_ids or None
+        )
         
         # Step 2: Determine number of nodes from tensor
         num_nodes = input_tensor.shape[2]
+        
+        # Validate against config
+        expected_nodes = config.get('num_nodes', num_nodes)
+        if num_nodes != expected_nodes:
+            logger.error(
+                f"Node count mismatch! Tensor has {num_nodes} nodes "
+                f"but model expects {expected_nodes}. Check data pipeline."
+            )
         
         # Step 3: Initialize model
         model = MockSTGTNModel(num_nodes=num_nodes, predict_steps=12)
@@ -230,8 +349,10 @@ def run_inference(window: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # Step 4: Run prediction
         predictions = model.predict(input_tensor)
         
-        # Step 5: Format results
-        formatted_results = format_predictions(predictions)
+        # Step 5: Format results (with actual node IDs)
+        formatted_results = format_predictions(
+            predictions, canonical_node_ids=canonical_node_ids or None
+        )
         
         logger.info(
             f"Inference completed successfully: "
