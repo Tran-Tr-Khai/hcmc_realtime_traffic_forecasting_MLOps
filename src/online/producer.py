@@ -24,7 +24,7 @@ class KafkaTrafficProducer:
         bootstrap_servers: str = 'localhost:9092',
         topic_name: str = 'traffic-raw',
         input_file: str = 'data/raw/hcmc-traffic-data-realtime.json',
-        speed_factor: float = 20.0
+        speed_factor: float = 10.0
     ):
         """
         Initialize the Kafka producer.
