@@ -4,7 +4,7 @@ import logging
 import signal
 import sys
 from typing import Dict, List, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 
 from kafka.errors import KafkaError
@@ -36,7 +36,8 @@ class TrafficDataBuffer:
         ts_ms = message.get("ts")
         if not ts_ms: return None
         
-        msg_dt = datetime.fromtimestamp(ts_ms / 1000.0)
+        VN_TZ = timezone(timedelta(hours=7))  # Vietnam timezone
+        msg_dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=VN_TZ)
         msg_window_start = self._get_aligned_timestamp(msg_dt)
         snapshot = None
   

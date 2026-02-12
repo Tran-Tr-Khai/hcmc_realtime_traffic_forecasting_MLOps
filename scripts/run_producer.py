@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 def main():
     # 1. Dùng argparse để nhận tham số từ bên ngoài (Cực tiện cho Airflow/Docker)
     parser = argparse.ArgumentParser(description="Run Traffic Kafka Producer")
-    parser.add_argument("--speed", type=float, default=20.0, help="Speed factor simulation")
-    parser.add_argument("--file", type=str, default="data/raw/hcmc-traffic-data-realtime.json", help="Path to input file")
+    parser.add_argument("--speed", type=float, default=10.0, help="Speed factor simulation")
+    parser.add_argument("--file", type=str, default="data/realtime/hcmc-traffic-data-realtime.json", help="Path to input file")
     parser.add_argument("--broker", type=str, default="localhost:9092", help="Kafka Broker URL")
     
     args = parser.parse_args()

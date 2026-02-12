@@ -238,16 +238,34 @@ class RedisStateManager:
             logger.error(f"Failed to clear window: {e}")
             return False
     
-    def save_predictions(self, predictions: List[Dict[str, Any]]) -> bool:
+    def save_predictions(self, predictions: Dict[str, Any]) -> bool:
+        """
+        Save predictions to Redis in optimized format.
+        
+        Expected predictions format:
+        {
+            "timestamp": "2024-01-01T12:00:00+07:00",
+            "data": {"node_id": flow, ...}
+        }
+        
+        Args:
+            predictions: Dictionary with timestamp and flattened node predictions
+            
+        Returns:
+            bool: True if successful
+        """
         PREDICTION_KEY = "traffic:predictions:latest"
-        try: 
-            self.client.set(PREDICTION_KEY, json.dumps({
-                "timestamp": datetime.utcnow().isoformat(),
-                "data": predictions
-            }))
+        try:
+            # Store predictions as-is (already in correct format from inference)
+            # DO NOT generate new timestamp - preserve the one from input data
+            self.client.set(PREDICTION_KEY, json.dumps(predictions))
+            
+            timestamp = predictions.get("timestamp", "N/A")
+            logger.info(f"Saved predictions to Redis with timestamp: {timestamp}")
+            
             return True
         except Exception as e:
-            logger.error(f"Failed to save prediction: {e}")
+            logger.error(f"Failed to save predictions: {e}")
             return False
         
     def close(self):
