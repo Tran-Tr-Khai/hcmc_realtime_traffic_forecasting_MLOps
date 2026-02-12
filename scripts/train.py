@@ -128,7 +128,7 @@ def load_data_from_minio(
     bucket: str, 
     traffic_file: str, 
     adj_matrix_file: str
-) -> Tuple[np.ndarray, np.ndarray, int]:
+) -> Tuple[np.ndarray, np.ndarray, int, list]:
     """
     Load traffic data and adjacency matrix from MinIO.
     
@@ -142,6 +142,7 @@ def load_data_from_minio(
         traffic_data: Numpy array of shape (Total_Time, Num_Nodes)
         adj_matrix: Numpy array of shape (Num_Nodes, Num_Nodes)
         num_nodes: Number of nodes in the graph
+        node_ids: Ordered list of sensor ID strings (canonical order for inference)
     """
     logger.info(f"Loading data from MinIO bucket: {bucket}")
     
@@ -159,9 +160,15 @@ def load_data_from_minio(
         # Assume first column is timestamp, rest are sensor readings
         if 'time' in traffic_df.columns or 'timestamp' in traffic_df.columns:
             time_col = 'time' if 'time' in traffic_df.columns else 'timestamp'
+            sensor_columns = [c for c in traffic_df.columns if c != time_col]
             traffic_data = traffic_df.drop(time_col).to_numpy()
         else:
+            sensor_columns = list(traffic_df.columns)
             traffic_data = traffic_df.to_numpy()
+        
+        # sensor_columns preserves the canonical column order from offline pipeline
+        # This order MUST match the adjacency matrix row/col order
+        logger.info(f"Canonical node order: {len(sensor_columns)} sensors, first 5: {sensor_columns[:5]}")
         
         # Load adjacency matrix (NumPy format)
         logger.info(f"Loading adjacency matrix from {adj_matrix_file}...")
@@ -179,7 +186,7 @@ def load_data_from_minio(
             )
         
         logger.info(f"Successfully loaded data: {traffic_data.shape[0]} time steps, {num_nodes} nodes")
-        return traffic_data, adj_matrix, num_nodes
+        return traffic_data, adj_matrix, num_nodes, sensor_columns
         
     except Exception as e:
         logger.error(f"Failed to load data from MinIO: {e}")
@@ -221,23 +228,27 @@ def save_config(
     config_path: str, 
     max_flow: float, 
     num_nodes: int, 
-    args: argparse.Namespace
+    args: argparse.Namespace,
+    node_ids: list = None
 ):
     """
     Save model configuration to JSON file for inference.
     
     This file is CRITICAL for inference: it contains the normalization factor
-    needed to convert model predictions (0-1 range) back to vehicle counts.
+    needed to convert model predictions (0-1 range) back to vehicle counts,
+    AND the canonical node ordering for proper tensor alignment.
     
     Args:
         config_path: Path to save config JSON
         max_flow: Maximum traffic flow value from training set
         num_nodes: Number of nodes in the graph
         args: Command line arguments
+        node_ids: Ordered list of sensor ID strings (canonical order)
     """
     config = {
         'max_flow': float(max_flow),
         'num_nodes': int(num_nodes),
+        'node_ids': node_ids or [],  # Canonical node ordering for inference alignment
         'input_len': args.input_len,
         'output_len': args.output_len,
         'd_model': args.d_model,
@@ -392,7 +403,7 @@ def main():
         logger.info("=" * 80)
         
         minio_client = MinIOClient(bucket_name=args.bucket)
-        traffic_data, adj_matrix, num_nodes = load_data_from_minio(
+        traffic_data, adj_matrix, num_nodes, sensor_columns = load_data_from_minio(
             minio_client, args.bucket, args.traffic_file, args.adj_matrix_file
         )
         
@@ -416,8 +427,8 @@ def main():
         max_flow = float(train_data.max())
         logger.info(f"Training set max_flow: {max_flow:.2f}")
         
-        # Save configuration for inference
-        save_config(args.config_file, max_flow, num_nodes, args)
+        # Save configuration for inference (including canonical node ordering)
+        save_config(args.config_file, max_flow, num_nodes, args, node_ids=sensor_columns)
         
         # ======================================================================
         # STEP 4: Create PyTorch Datasets and DataLoaders

@@ -250,56 +250,56 @@ def prepare_input_tensor(
 
 def format_predictions(
     predictions: np.ndarray,
-    canonical_node_ids: Optional[List[str]] = None
-) -> List[Dict[str, Any]]:
+    canonical_node_ids: Optional[List[str]] = None,
+    base_timestamp: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Convert model predictions to human-readable format.
+    Convert model predictions to optimized dictionary format.
+    
+    Only returns the first time step (t=1) in a flattened structure:
+    {
+        "timestamp": "2024-01-01T12:00:00",
+        "data": {"node_id_1": flow_value, "node_id_2": flow_value, ...}
+    }
     
     Args:
         predictions: Shape (1, predict_steps, num_nodes, 1)
         canonical_node_ids: Ordered list of sensor IDs for labeling
+        base_timestamp: Timestamp from the last record in the input window (UTC+7)
     
     Returns:
-        List of prediction dictionaries
+        Dictionary with timestamp and flattened node predictions
     """
     batch_size, time_steps, num_nodes, features = predictions.shape
     
-    results = []
+    # Extract predictions for the FIRST time step only (t=0, which is time_step 1)
+    step_predictions = predictions[0, 0, :, 0]  # Shape: (num_nodes,)
     
-    for t in range(time_steps):
-        # Extract predictions for this time step
-        step_predictions = predictions[0, t, :, 0]  # Shape: (num_nodes,)
-        
-        # Create prediction object with actual node IDs if available
-        node_predictions = []
-        for node_idx, flow in enumerate(step_predictions):
-            node_id = (
-                canonical_node_ids[node_idx] 
-                if canonical_node_ids and node_idx < len(canonical_node_ids)
-                else node_idx
-            )
-            node_predictions.append({
-                "node_id": node_id,
-                "predicted_flow": float(flow),
-            })
-        
-        pred_obj = {
-            "time_step": t + 1,
-            "predictions": node_predictions,
-            "statistics": {
-                "mean_flow": float(step_predictions.mean()),
-                "std_flow": float(step_predictions.std()),
-                "min_flow": float(step_predictions.min()),
-                "max_flow": float(step_predictions.max()),
-            }
-        }
-        
-        results.append(pred_obj)
+    # Create flattened dictionary: {node_id: predicted_flow}
+    data_dict = {}
+    for node_idx, flow in enumerate(step_predictions):
+        node_id = (
+            str(canonical_node_ids[node_idx])
+            if canonical_node_ids and node_idx < len(canonical_node_ids)
+            else str(node_idx)
+        )
+        data_dict[node_id] = float(flow)
     
-    return results
+    # Build optimized response structure
+    result = {
+        "timestamp": base_timestamp if base_timestamp else "",
+        "data": data_dict
+    }
+    
+    logger.info(
+        f"Formatted predictions: {len(data_dict)} nodes, "
+        f"timestamp={base_timestamp}"
+    )
+    
+    return result
 
 
-def run_inference(window: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def run_inference(window: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Main inference function - orchestrates the prediction pipeline.
     
@@ -310,14 +310,30 @@ def run_inference(window: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         window: List of 12 traffic snapshots from Redis
     
     Returns:
-        List of formatted predictions
+        Dictionary with optimized structure:
+        {
+            "timestamp": "2024-01-01T12:00:00",
+            "data": {"node_id": predicted_flow, ...}
+        }
     """
     logger.info("=" * 60)
     logger.info("Starting inference pipeline")
     logger.info("=" * 60)
     
     try:
-        # Step 0: Load model config (canonical node ordering)
+        # Step 0: Extract timestamp from the last record in the window
+        # This timestamp is already in UTC+7 (Vietnam timezone)
+        base_timestamp = None
+        if window and len(window) > 0:
+            base_timestamp = window[-1].get("timestamp")
+            if base_timestamp:
+                logger.info(f"Using timestamp from input window: {base_timestamp}")
+            else:
+                logger.warning("No timestamp found in last window record")
+        else:
+            logger.warning("Empty window provided, no timestamp available")
+        
+        # Step 1: Load model config (canonical node ordering)
         config = load_model_config()
         canonical_node_ids = config.get('node_ids', [])
         
@@ -327,12 +343,12 @@ def run_inference(window: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "with adjacency matrix. Re-run training to fix."
             )
         
-        # Step 1: Prepare input tensor (aligned to canonical order)
+        # Step 2: Prepare input tensor (aligned to canonical order)
         input_tensor = prepare_input_tensor(
             window, canonical_node_ids=canonical_node_ids or None
         )
         
-        # Step 2: Determine number of nodes from tensor
+        # Step 3: Determine number of nodes from tensor
         num_nodes = input_tensor.shape[2]
         
         # Validate against config
@@ -343,23 +359,25 @@ def run_inference(window: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 f"but model expects {expected_nodes}. Check data pipeline."
             )
         
-        # Step 3: Initialize model
+        # Step 4: Initialize model
         model = MockSTGTNModel(num_nodes=num_nodes, predict_steps=12)
         
-        # Step 4: Run prediction
+        # Step 5: Run prediction
         predictions = model.predict(input_tensor)
         
-        # Step 5: Format results (with actual node IDs)
-        formatted_results = format_predictions(
-            predictions, canonical_node_ids=canonical_node_ids or None
+        # Step 6: Format results (flattened dict with first time step only)
+        formatted_result = format_predictions(
+            predictions, 
+            canonical_node_ids=canonical_node_ids or None,
+            base_timestamp=base_timestamp
         )
         
         logger.info(
             f"Inference completed successfully: "
-            f"{len(formatted_results)} time steps predicted"
+            f"{len(formatted_result.get('data', {}))} nodes predicted"
         )
         
-        return formatted_results
+        return formatted_result
         
     except Exception as e:
         logger.error(f"Inference failed: {e}", exc_info=True)
@@ -370,13 +388,22 @@ def run_inference(window: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # Testing & Validation
 # =====================================================================
 
-def generate_mock_window(num_snapshots: int = 12, num_nodes: int = 50) -> List[Dict]:
+def generate_mock_window(
+    num_snapshots: int = 12, 
+    num_nodes: int = 50,
+    base_timestamp: Optional[str] = None
+) -> List[Dict]:
     """
     Generate a mock window for testing purposes.
+    
+    NOTE: For production use, timestamps should come from actual Kafka data
+    which is already normalized to UTC+7 (Vietnam timezone).
     
     Args:
         num_snapshots: Number of snapshots to generate
         num_nodes: Number of traffic nodes
+        base_timestamp: Optional ISO timestamp to use as base (already in UTC+7).
+                       If None, generates test timestamps for demo purposes only.
     
     Returns:
         List of mock snapshots
@@ -384,7 +411,19 @@ def generate_mock_window(num_snapshots: int = 12, num_nodes: int = 50) -> List[D
     from datetime import datetime, timedelta
     
     window = []
-    base_time = datetime.utcnow() - timedelta(minutes=5 * num_snapshots)
+    
+    # Use provided timestamp or generate test timestamp
+    if base_timestamp:
+        # Parse provided timestamp (assumed to be in UTC+7)
+        base_time = datetime.fromisoformat(base_timestamp.replace('Z', '+00:00'))
+    else:
+        # Test/demo mode: generate arbitrary timestamps
+        # NOTE: In production, this branch should NOT be used
+        base_time = datetime.utcnow() - timedelta(minutes=5 * num_snapshots)
+        logger.warning(
+            "Generating test timestamps with utcnow(). "
+            "In production, use actual timestamps from Kafka data."
+        )
     
     for i in range(num_snapshots):
         timestamp = base_time + timedelta(minutes=5 * i)
@@ -424,19 +463,43 @@ if __name__ == "__main__":
     # Generate test data
     test_window = generate_mock_window(num_snapshots=12, num_nodes=50)
     
+    # Display input timestamp (from last record)
+    input_timestamp = test_window[-1].get("timestamp")
+    print(f"Input window last timestamp: {input_timestamp}\n")
+    
     # Run inference
     results = run_inference(test_window)
     
     # Display sample results
     print("\n" + "=" * 60)
-    print("Sample Prediction Results")
+    print("Optimized Prediction Results")
     print("=" * 60)
     
-    for i, pred in enumerate(results[:3]):  # Show first 3 time steps
-        print(f"\nTime Step {pred['time_step']}:")
-        print(f"  Mean flow: {pred['statistics']['mean_flow']:.2f} km/h")
-        print(f"  Std flow:  {pred['statistics']['std_flow']:.2f} km/h")
-        print(f"  Range:      [{pred['statistics']['min_flow']:.2f}, "
-              f"{pred['statistics']['max_flow']:.2f}]")
+    # Results is now a dictionary with timestamp and data
+    print(f"\nTimestamp: {results.get('timestamp')}")
+    print(f"Number of nodes: {len(results.get('data', {}))}")
+    
+    # Show first 5 node predictions
+    data = results.get('data', {})
+    print("\nSample predictions (first 5 nodes):")
+    for i, (node_id, flow) in enumerate(list(data.items())[:5]):
+        print(f"  Node {node_id}: {flow:.2f} km/h")
+    
+    # Calculate statistics from data
+    if data:
+        flows = list(data.values())
+        print(f"\nStatistics:")
+        print(f"  Mean flow: {np.mean(flows):.2f} km/h")
+        print(f"  Std flow:  {np.std(flows):.2f} km/h")
+        print(f"  Range:     [{min(flows):.2f}, {max(flows):.2f}]")
+    
+    # Verify timestamp preservation
+    output_timestamp = results.get("timestamp")
+    print("\n" + "=" * 60)
+    print("Timestamp Verification")
+    print("=" * 60)
+    print(f"Input (last record):   {input_timestamp}")
+    print(f"Output (predictions):  {output_timestamp}")
+    print(f"Match: {input_timestamp == output_timestamp}")
     
     print("\nTest completed successfully!\n")
