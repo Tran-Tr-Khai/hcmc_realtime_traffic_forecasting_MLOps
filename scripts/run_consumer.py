@@ -1,29 +1,3 @@
-"""
-Real-time Traffic Consumer - Main Entry Point
-==============================================
-
-This script starts the real-time traffic data consumer with
-Kafka and Redis integration.
-
-Usage:
-    python scripts/run_consumer.py
-
-Environment Variables:
-    KAFKA_BROKER          - Kafka bootstrap servers (default: kafka:29092)
-    KAFKA_TOPIC           - Kafka topic name (default: traffic-realtime)
-    KAFKA_GROUP_ID        - Consumer group ID (default: traffic-consumer-group)
-    REDIS_HOST            - Redis hostname (default: redis)
-    REDIS_PORT            - Redis port (default: 6379)
-    REDIS_DB              - Redis database number (default: 0)
-    WINDOW_SIZE           - Sliding window size (default: 12)
-    BUFFER_INTERVAL_SEC   - Buffer flush interval in seconds (default: 300)
-
-Environment Loading Priority:
-    1. System environment variables (highest priority)
-    2. Variables from .env file in project root
-    3. Default values (lowest priority)
-"""
-
 import os
 import sys
 import logging

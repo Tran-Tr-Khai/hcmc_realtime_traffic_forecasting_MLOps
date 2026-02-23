@@ -33,8 +33,14 @@ def main():
     parser.add_argument("--graph-key", type=str, default="raw/hcmc-clustered-graph.json", help="Input Graph Topology key")
     parser.add_argument("--bucket", type=str, help="MinIO bucket name (override env var)")
     
-    # Output Args (SỬA ĐỔI: Dùng MinIO Key thay vì Local Path)
+    # Output Args
     parser.add_argument("--output-key", type=str, default="processed/traffic_clean.parquet", help="Output MinIO key (Parquet)")
+    
+    # Kafka Dumps Args (NEW)
+    parser.add_argument("--kafka-dumps-prefix", type=str, default="raw/kafka-dumps", 
+                        help="MinIO prefix for Kafka dump files")
+    parser.add_argument("--window-days", type=int, default=30, 
+                        help="Rolling window size (days) for historical data. Use 0 to disable windowing.")
     
     # Config Args
     parser.add_argument("--interval", type=str, default="5m", help="Resampling interval")
@@ -42,12 +48,21 @@ def main():
     args = parser.parse_args()
     
     try:
-        # 1. Khởi tạo Pipeline
+        # 1. Initialize Pipeline with "Concat Raw First" strategy
+        logger.info("="*80)
+        logger.info("OFFLINE PIPELINE - CONCAT RAW DATA FIRST STRATEGY")
+        logger.info("="*80)
+        logger.info(f"Windowing: {args.window_days} days" if args.window_days > 0 else "Windowing: DISABLED")
+        logger.info(f"Kafka dumps prefix: {args.kafka_dumps_prefix}")
+        logger.info("="*80)
+        
         pipeline = OfflinePipeline(
             raw_data_key=args.data_key,
             graph_key=args.graph_key,
             bucket_name=args.bucket,
-            output_key=args.output_key, # <--- Truyền Output Key vào đây
+            kafka_dumps_prefix=args.kafka_dumps_prefix,
+            output_key=args.output_key,
+            window_days=args.window_days if args.window_days > 0 else None,
             interval=args.interval
         )
         
