@@ -4,7 +4,7 @@ version: "3.8"
 # ============================================================================
 x-airflow-common:
   &airflow-common
-  image: apache/airflow:2.8.1-python3.11
+  build: .
   environment:
     &airflow-common-env
     # --- Ép Airflow chạy chế độ Tối giản (Không cần Worker/Redis riêng) ---
@@ -15,7 +15,7 @@ x-airflow-common:
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
-    
+  
     # --- Biến môi trường Project ---
     MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:-http://minio:9000}
     MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
@@ -24,8 +24,8 @@ x-airflow-common:
 
   volumes:
     - ./dags:/opt/airflow/dags
-    - .:/opt/airflow/dags/repo:ro
-    - ./logs/airflow:/opt/airflow/logs
+    - .:/opt/airflow/dags/repo
+    - airflow-logs:/opt/airflow/logs
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     postgres-airflow:
@@ -112,28 +112,6 @@ services:
       DYNAMIC_CONFIG_ENABLED: 'true'
     networks:
       - traffic-network
-
-  kafka-dumper:
-    build:
-      context: .
-      dockerfile: Dockerfile.kafka-dumper
-    container_name: kafka-dumper
-    depends_on:
-      kafka:
-        condition: service_healthy
-    environment:
-      KAFKA_BROKER: kafka:29092
-      KAFKA_TOPIC: traffic-raw
-      OUTPUT_DIR: /app/data/kafka_dumps
-    volumes:
-      - ./data/kafka_dumps:/app/data/kafka_dumps
-      - ./logs:/app/logs
-      - ./src:/app/src:ro
-      - ./scripts:/app/scripts:ro
-    networks:
-      - traffic-network
-    restart: unless-stopped
-    command: python scripts/kafka_dumper.py --broker kafka:29092 --output-dir /app/data/kafka_dumps
 
   redis:
     image: redis:7-alpine
@@ -239,4 +217,6 @@ volumes:
   redis-data:
     driver: local
   postgres-airflow-data:
+    driver: local
+  airflow-logs:
     driver: local

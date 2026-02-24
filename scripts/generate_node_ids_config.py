@@ -1,20 +1,3 @@
-"""
-Utility Script: Generate canonical node_ids in config.json
-===========================================================
-
-This script reads the training parquet from MinIO to extract the exact
-column order (canonical node ordering) and updates config.json.
-
-Use this script if config.json was created by an older version of train.py
-that did not save node_ids.
-
-After running, config.json will contain a 'node_ids' field with the
-exact string-sorted sensor IDs matching the adjacency matrix order.
-
-Usage:
-    python scripts/generate_node_ids_config.py
-"""
-
 import sys
 import os
 import io

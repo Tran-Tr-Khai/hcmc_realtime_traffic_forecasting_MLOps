@@ -22,13 +22,13 @@ def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Kafka Daily Dumper - Archive streaming data to daily files")
     parser.add_argument('--broker', default=os.getenv('KAFKA_BROKER', 'kafka:29092'), help='Kafka bootstrap servers (default: kafka:29092)')
-    parser.add_argument('--topic', default=os.getenv('KAFKA_TOPIC', 'traffic-raw'), help='Kafka topic to consume from (default: traffic-raw)')
-    parser.add_argument('--group-id', default='kafka-dumper-group', help='Consumer group ID (default: kafka-dumper-group)')
+    parser.add_argument('--topic', default=os.getenv('KAFKA_TOPIC', 'traffic-realtime'), help='Kafka topic to consume from (default: traffic-raw)')
+    parser.add_argument('--group-id', default='dumper-recovery-group', help='Consumer group ID (default: kafka-dumper-group)')
     parser.add_argument('--output-dir', default='data/kafka_dumps', help='Directory to save daily dumps (default: data/kafka_dumps)')
     parser.add_argument(
         '--auto-offset-reset',
         choices=['earliest', 'latest'],
-        default='latest',
+        default='earliest',
         help='Where to start consuming: earliest (from beginning) or latest (from now)'
     )
     

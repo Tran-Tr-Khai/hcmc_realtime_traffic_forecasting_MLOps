@@ -67,6 +67,7 @@ class CausalImputer:
             sparsity_l3 = (nulls_l3 / total_cells) * 100
             logger.info(f"Layer 3 (History)  fixed: {fixed_l3:,}. Remaining: {nulls_l3:,} ({sparsity_l3:.2f}%)")
         else:
+            nulls_l3 = 0
             logger.info("Layer 3 skipped.")
         
         # --- LAYER 4: GLOBAL MEAN RESCUE ---

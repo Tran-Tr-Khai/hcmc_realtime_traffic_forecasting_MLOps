@@ -6,16 +6,12 @@ import sys
 # Thêm thư mục gốc vào sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Tạo folder logs trước khi config logging
-os.makedirs("logs", exist_ok=True)
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
-        logging.FileHandler("logs/offline_pipeline.log"),
-        # logging.StreamHandler() # Bỏ comment nếu muốn in ra màn hình
+        logging.StreamHandler()
     ],
     force=True
 )

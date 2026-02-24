@@ -1,0 +1,14 @@
+# Airflow ignore patterns
+logs/
+minio_data/
+__pycache__
+.*\.pyc
+.git/
+.venv/
+venv/
+models/
+data/
+benchmarks/
+docs/
+tests/
+repo/dags/
