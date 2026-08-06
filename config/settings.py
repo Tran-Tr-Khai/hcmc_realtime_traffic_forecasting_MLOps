@@ -17,6 +17,7 @@ class S3Config(BaseModel):
 
 class OfflinePipelineConfig(BaseModel):
     raw_history_key: str = "raw/hcmc-traffic-history.json"
+    graph_key: str = "raw/hcmc-clustered-graph.json"
     processed_history_key: str = "processed/train.parquet"
 
 
