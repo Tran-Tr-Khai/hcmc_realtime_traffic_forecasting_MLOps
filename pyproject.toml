@@ -8,16 +8,20 @@ dependencies = [
     "boto3",
     "duckdb",
     "ijson",
+    "numpy",
     "polars",
     "pydantic",
     "pydantic-settings",
     "pytz",
+    "pyyaml",
+    "torch",
 ]
 
 [project.scripts]
 run-etl = "src.jobs.pipelines.run_etl:main"
 check-train-data = "src.jobs.quality.check_train_data:main"
 show-train-gaps = "src.jobs.quality.show_train_gaps:main"
+train-model = "src.jobs.training.train_model:main"
 prepare-graph = "src.jobs.quality.prepare_graph:main"
 
 [build-system]
@@ -26,3 +30,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["config*", "src*"]
+
+
+
+

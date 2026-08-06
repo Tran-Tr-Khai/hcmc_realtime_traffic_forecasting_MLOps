@@ -1,0 +1,19 @@
+model:
+  name: stgtn
+  hidden_dim: 64
+  pe_dim: 16
+  num_heads: 4
+  dropout: 0.15
+
+training:
+  input_len: 24
+  output_len: 3
+  train_ratio: 0.8
+  batch_size: 32
+  epochs: 15
+  learning_rate: 0.001
+  grad_clip: 5.0
+  seed: 42
+
+artifacts:
+  prefix: models/stgtn/latest
