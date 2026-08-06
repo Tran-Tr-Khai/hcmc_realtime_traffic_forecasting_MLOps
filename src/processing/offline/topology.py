@@ -50,6 +50,13 @@ def load_graph_topology(stream: BinaryIO) -> GraphTopology:
     if not node_ids:
         node_ids = list(range(len(adjacency_matrix)))
 
+    if len(node_ids) != len(adjacency_matrix):
+        raise ValueError(
+            "Graph topology is inconsistent: camera-dictionary has "
+            f"{len(node_ids)} node(s) but adjacency-matrix has {len(adjacency_matrix)} row(s). "
+            "Regenerate the clustered graph file so both match before using it for training or imputation."
+        )
+
     return GraphTopology(
         node_ids=node_ids,
         adjacency_matrix=adjacency_matrix,
