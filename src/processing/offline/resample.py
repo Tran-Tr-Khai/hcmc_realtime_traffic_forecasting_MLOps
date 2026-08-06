@@ -1,4 +1,6 @@
-from datetime import time
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
 import polars as pl
 
 TIMESTAMP_MS_COLUMN = "timestamp_ms"
@@ -62,7 +64,6 @@ def filter_time_range(
 
 
 def sensor_sort_key(column_name: str) -> tuple[int, int | str]:
-    """Sort numeric sensor names numerically, fall back to string sorting."""
     try:
         return (0, int(column_name))
     except ValueError:
@@ -81,10 +82,54 @@ def pivot_by_sensor(df: pl.DataFrame) -> pl.DataFrame:
     ).rename({TIMESTAMP_BUCKET_COLUMN: TIMESTAMP_COLUMN})
 
     sensor_columns = sorted(
-        (col for col in wide_df.columns if col != TIMESTAMP_COLUMN),
+        (column for column in wide_df.columns if column != TIMESTAMP_COLUMN),
         key=sensor_sort_key,
     )
     return wide_df.sort(TIMESTAMP_COLUMN).select([TIMESTAMP_COLUMN, *sensor_columns])
+
+
+def parse_interval(interval: str) -> timedelta:
+    if interval.endswith("m"):
+        return timedelta(minutes=int(interval[:-1]))
+    if interval.endswith("h"):
+        return timedelta(hours=int(interval[:-1]))
+    raise ValueError(f"Unsupported interval format: {interval}")
+
+
+def build_date_span(start_date: date, end_date: date) -> list[date]:
+    total_days = (end_date - start_date).days + 1
+    return [start_date + timedelta(days=offset) for offset in range(total_days)]
+
+
+def build_full_timeline(
+    df: pl.DataFrame,
+    interval: str,
+    timezone: str,
+    start_time: time | None,
+    end_time: time | None,
+) -> pl.DataFrame:
+    if df.is_empty() or start_time is None or end_time is None:
+        return df
+
+    start_date = df.select(pl.col(TIMESTAMP_COLUMN).dt.date().min()).item()
+    end_date = df.select(pl.col(TIMESTAMP_COLUMN).dt.date().max()).item()
+    step = parse_interval(interval)
+    tz = ZoneInfo(timezone)
+
+    timeline: list[datetime] = []
+    for current_date in build_date_span(start_date, end_date):
+        current_timestamp = datetime.combine(current_date, start_time, tzinfo=tz)
+        end_timestamp = datetime.combine(current_date, end_time, tzinfo=tz)
+
+        while current_timestamp <= end_timestamp:
+            timeline.append(current_timestamp)
+            current_timestamp += step
+
+    timeline_df = pl.DataFrame(
+        {TIMESTAMP_COLUMN: timeline},
+        schema={TIMESTAMP_COLUMN: pl.Datetime(time_zone=timezone)},
+    )
+    return timeline_df.join(df, on=TIMESTAMP_COLUMN, how="left")
 
 
 def resample_traffic(
@@ -105,4 +150,12 @@ def resample_traffic(
         .pipe(aggregate_by_interval, interval=interval)
         .pipe(filter_time_range, start_time, end_time)
         .pipe(pivot_by_sensor)
+        .pipe(
+            build_full_timeline,
+            interval=interval,
+            timezone=timezone,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        .sort(TIMESTAMP_COLUMN)
     )

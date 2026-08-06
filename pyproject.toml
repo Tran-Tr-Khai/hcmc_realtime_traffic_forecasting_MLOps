@@ -15,8 +15,9 @@ dependencies = [
 ]
 
 [project.scripts]
-run-etl = "src.jobs.run_etl:main"
-check-train-data = "src.jobs.check_train_data:main"
+run-etl = "src.jobs.pipelines.run_etl:main"
+check-train-data = "src.jobs.quality.check_train_data:main"
+show-train-gaps = "src.jobs.quality.show_train_gaps:main"
 
 [build-system]
 requires = ["setuptools>=68"]
